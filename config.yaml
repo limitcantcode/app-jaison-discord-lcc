@@ -1,0 +1,2 @@
+jaison-api-endpoint: "http://localhost:5001"
+jaison-ws-endpoint: "ws://localhost:5001"

@@ -1,0 +1,9 @@
+discord.py==2.4.0
+discord-ext-voice-recv==0.4.2a145
+python-dotenv==1.0.1
+websockets==13.1
+asyncio==3.4.3
+requests==2.32.3
+pyyaml==6.0.2
+websockets==13.1
+apscheduler==3.11.0
