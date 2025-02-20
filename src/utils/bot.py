@@ -19,6 +19,8 @@ from utils.time import get_current_time
 class DiscordBot(discord.Client):
 
     def __init__(self):
+        if config.opus_filepath is not None: discord.opus.load_opus(config.opus_filepath)
+
         logger.debug("Activating with all intents...")
         super().__init__(intents=discord.Intents.all())
         logger.debug("Reloading command tree...")

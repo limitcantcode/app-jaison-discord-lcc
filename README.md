@@ -5,7 +5,7 @@ Discord Bot app plugin for [Project J.A.I.son](https://github.com/limitcantcode/
 ### Installation
 
 This project was tested on python3.12
-
+ 
 1. Create and activate your virtual environment using `conda` or `venv`.
 2. Install dependencies `pip install -r requirements.txt`
 3. Setup [Discord bot](https://discord.com/developers/applications). Ensure your bot has the right OAuth2 permissions when it joins your server (Scope -> Bot, Bot Permissions -> Administrator if unsure). Invite your bot to your server.
@@ -13,7 +13,7 @@ This project was tested on python3.12
 
 <img src="./assets/discord_1.png" alt="discord bot token location" height="200"/>
 
-5. Setup `config.yaml` to where [jaison-core](https://github.com/limitcantcode/jaison-core) is running. `jaison-api-endpoint` should start with `http(s)://` and `jaison-ws-endpoint` with `ws://`
+5. Setup `config.yaml` to where [jaison-core](https://github.com/limitcantcode/jaison-core) is running. `jaison-api-endpoint` should start with `http(s)://` and `jaison-ws-endpoint` with `ws://`. If not on Windows, add the filepath to [libopus](https://github.com/shardlab/discordrb/wiki/Installing-libopus) in `config.yaml`.
 
 ## Usage
 
