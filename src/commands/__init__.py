@@ -1,5 +1,6 @@
 import discord
 from .voice import VoiceCommandGroup
+from .manage import ManageCommandGroup
 
 '''
 Create a command tree for the given client. This adds slash commands
@@ -20,6 +21,7 @@ def add_commands(client: discord.Client, server_id: str):
 
     # List of command group setups
     VoiceCommandGroup(params=params).setup(tree)
+    ManageCommandGroup(params=params).setup(tree)
 
     # Returning final tree
     return tree, params

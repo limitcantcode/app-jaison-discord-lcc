@@ -256,3 +256,14 @@ class DiscordBot(discord.Client):
                     self.vc.send_audio_packet(b"\xf8\xff\xfe", encode=False)
             except Exception as err:
                 logging.error("keep_alive heartbeat failed", exc_info=True)
+                
+                
+    ## Other functionality
+    def clear_conversation(self):
+        response = requests.delete(
+            self.config.jaison_api_endpoint + '/api/context/conversation'
+        ).json()
+        
+        if response['status'] != 200:
+            raise Exception(f"{response['status']} {response['message']}")
+    
