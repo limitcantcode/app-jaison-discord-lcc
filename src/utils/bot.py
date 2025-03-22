@@ -153,12 +153,13 @@ class DiscordBot(discord.Client):
             logging.error(f"Failed to start add voice data to conversation: {response['status']} {response['message']}")
     
     async def queue_audio(self, audio_bytes: bytes, sr: int, sw: int, ch: int):
-        await self.audio_queue.put({
-            "audio_bytes": audio_bytes,
-            "sr": sr,
-            "sw": sw,
-            "ch": ch
-        })
+        if len(audio_bytes) > 0:
+            await self.audio_queue.put({
+                "audio_bytes": audio_bytes,
+                "sr": sr,
+                "sw": sw,
+                "ch": ch
+            })
     
     async def _play_audio_loop(self):
         while True:
