@@ -4,13 +4,14 @@ Discord Bot Main Class to interface with Discord
 
 import discord
 import asyncio
+from asyncio import CancelledError
 import os
 import json
 import requests
 import base64
 import websockets
 import logging
-from typing import Dict
+from typing import Dict, Set
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from commands import add_commands
 from commands.sink import BufferSink, UserAudioBuffer
@@ -37,10 +38,16 @@ class DiscordBot(discord.Client):
         self.scheduler: AsyncIOScheduler = None
         
         self.vc: discord.VoiceClient = None
-        self.audio_queue: asyncio.Queue = None
+        self.audio_input_queue: asyncio.Queue = None
+        self.audio_input_task: asyncio.Task = None
+        self.audio_output_job_id: str = None
+        self.audio_output_complete_event: asyncio.Event = None
+        self.audio_output_queue: asyncio.Queue = None
         self.audio_player_task: asyncio.Task = None
         self.audio_finish_event: asyncio.Event = None
         self.keep_alive_task: asyncio.Task = None
+        
+        self.response_request_id: int = 0
 
     # Handler for bot activation
     async def on_ready(self):
@@ -56,7 +63,12 @@ class DiscordBot(discord.Client):
         self.scheduler.start()
         
         self.vc = None
-        self.audio_queue = asyncio.Queue()
+        self.audio_input_queue = asyncio.Queue()
+        self.audio_input_task = asyncio.create_task(self._input_audio_loop())
+        self.audio_output_job_id = None
+        self.audio_output_complete_event = asyncio.Event()
+        self.audio_output_complete_event.set()
+        self.audio_output_queue = asyncio.Queue()
         self.audio_player_task = asyncio.create_task(self._play_audio_loop())
         self.audio_finish_event = asyncio.Event()
         self.keep_alive_task = asyncio.create_task(self._keep_alive_vc_listening())
@@ -85,7 +97,9 @@ class DiscordBot(discord.Client):
             }
         ).json()
         if response['status'] != 200:
-            logging.error(f"Failed to start a text message: {response['status']} {response['message']}")
+            reply = f"Failed to start a text message: {response['status']} {response['message']}"
+            logging.error(reply)
+            await self.send_text_to_channel(message.channel, reply)
             return
         
         response = requests.post(
@@ -96,7 +110,9 @@ class DiscordBot(discord.Client):
             }
         ).json()
         if response['status'] != 200:
-            logging.error(f"Failed to start a texting response job: {response['status']} {response['message']}")
+            reply = f"Failed to start a texting response job: {response['status']} {response['message']}"
+            logging.error(reply)
+            await self.send_text_to_channel(message.channel, reply)
             return
 
         self._add_text_job(
@@ -124,37 +140,87 @@ class DiscordBot(discord.Client):
         
     '''Start generating response during pause in conversation'''
     async def voice_cb(self):
-        response = requests.post(
-            self.config.jaison_api_endpoint+'/api/response',
-            headers={"Content-type":"application/json"},
-            json={"output_audio": True}
-        ).json()
+        self.response_request_id += 1
+        await self.audio_input_queue.put({
+            "type": "response_request",
+            "response_request_id": self.response_request_id
+        })
+        
+    def cancel_inflight_response(self):
+        if self.audio_output_job_id is not None and self.audio_output_complete_event.is_set():
+            requests.delete(
+                self.config.jaison_api_endpoint+'/app/job',
+                headers={"Content-type":"application/json"},
+                json={
+                    "job_id": self.audio_output_job_id,
+                    "reason": "Preventing interruption in conversation"
+                }
+            )
+            self.audio_output_job_id = None
+    
+    async def _input_audio_loop(self):
+        while True:
+            try:
+                input_d = await self.audio_input_queue.get()
+                if input_d['type'] == 'audio_input':
+                    response = requests.post(
+                        self.config.jaison_api_endpoint+'/api/context/conversation/audio',
+                        headers={"Content-type":"application/json"},
+                        json={
+                            "user": input_d['name'],
+                            "timestamp": input_d['timestamp'],
+                            "audio_bytes": base64.b64encode(input_d['audio_bytes']).decode('utf-8'),
+                            "sr": input_d['sr'],
+                            "sw": input_d['sw'],
+                            "ch": input_d['ch'],
+                        }
+                    ).json()
+                    
+                    if response['status'] != 200:
+                        raise Exception(f"Failed to start add voice data to conversation: {response['status']} {response['message']}")
+                elif input_d['type'] == 'response_request':
+                    if input_d['response_request_id'] == self.response_request_id:
+                        self.cancel_inflight_response()
+                        await self.audio_output_complete_event.wait()
+                        response = requests.post(
+                            self.config.jaison_api_endpoint+'/api/response',
+                            headers={"Content-type":"application/json"},
+                            json={"output_audio": True}
+                        ).json()
 
-        if response['status'] != 200:
-            logging.error(f"Failed to start a response job: {response['status']} {response['message']}")
+                        if response['status'] != 200:
+                            raise Exception(f"Failed to start a response job: {response['status']} {response['message']}")
+                            
+                        self.audio_output_job_id = response['response']['job_id']
+                else:
+                    raise Exception(f"Unexpected input dictionary in queue: {input_d}")
+            except CancelledError:
+                raise
+            except Exception as err:
+                logging.error("Error occured while processing job queue", exc_info=True)
     
     '''Save dialogue per person when the individual finishes speaking'''
-    async def user_timeout_cb(self, user_audio_buf: UserAudioBuffer, sink: BufferSink):
+    async def user_timeout_cb(self, user_audio_buf: UserAudioBuffer, sink: BufferSink):            
         sink.buf_d.pop(user_audio_buf.name)
-        response = requests.post(
-            self.config.jaison_api_endpoint+'/api/context/conversation/audio',
-            headers={"Content-type":"application/json"},
-            json={
-                "user": user_audio_buf.name,
-                "timestamp": user_audio_buf.timestamp,
-                "audio_bytes": base64.b64encode(user_audio_buf.audio_bytes).decode('utf-8'),
-                "sr": sink.sample_rate,
-                "sw": sink.sample_width,
-                "ch": sink.channels,
-            }
-        ).json()
+        await self.audio_input_queue.put({
+            "type": "audio_input",
+            "name": user_audio_buf.name,
+            "timestamp": user_audio_buf.timestamp,
+            "audio_bytes": user_audio_buf.audio_bytes,
+            "sr": sink.sample_rate,
+            "sw": sink.sample_width,
+            "ch": sink.channels
+        })
         
-        if response['status'] != 200:
-            logging.error(f"Failed to start add voice data to conversation: {response['status']} {response['message']}")
-    
-    async def queue_audio(self, audio_bytes: bytes, sr: int, sw: int, ch: int):
-        if len(audio_bytes) > 0:
-            await self.audio_queue.put({
+    async def queue_audio(self, job_id, audio_bytes: bytes = b'', sr: int = -1, sw: int = -1, ch: int = -1, finish: bool = False):
+        if finish: 
+            await self.audio_output_queue.put({
+                "job_id": job_id,
+                "finish": True
+            })
+        elif len(audio_bytes) > 0:
+            await self.audio_output_queue.put({
+                "job_id": job_id,
                 "audio_bytes": audio_bytes,
                 "sr": sr,
                 "sw": sw,
@@ -163,9 +229,14 @@ class DiscordBot(discord.Client):
     
     async def _play_audio_loop(self):
         while True:
-            next_audio: Dict = await self.audio_queue.get()
+            next_audio: Dict = await self.audio_output_queue.get()
+            if next_audio.get('finish', False): # next_audio['job_id'] == self.audio_output_job_id and next_audio.get('finish', False):
+                self.audio_output_complete_event.set()
+                continue
+            
             if self.vc is not None:
                 self.audio_finish_event.clear()
+                self.audio_output_complete_event.clear()
                 audio = format_audio(
                     next_audio['audio_bytes'],
                     next_audio['sr'],
@@ -212,13 +283,14 @@ class DiscordBot(discord.Client):
                                         text_channel=self.DEFAULT_TEXT_CHANNEL,
                                     )
                                     
-                                if event['response'].get('output_type') == 'text_final' and self.job_data[job_id]['output_text'] is True:
+                                if event['response'].get('output_type') == 'text_final' and self.job_data.get(job_id, {}).get('output_text', False) is True:
                                     if event['response']['finished'] is True and event['response']['success'] is True:
                                         await self.send_text_to_channel(
                                             self.job_data[job_id]['text_channel'],
                                             self.job_data[job_id]['text_content']
                                         )
-                                    elif event['response']['finished'] is True and event['response']['success'] is True:
+                                        del self.job_data[job_id]
+                                    elif event['response']['finished'] is True and event['response']['success'] is False:
                                         await self.send_text_to_channel(
                                             self.job_data[job_id]['text_channel'],
                                             "Something is wrong with my AI"
@@ -228,10 +300,16 @@ class DiscordBot(discord.Client):
                                 elif event['response'].get('output_type') == 'tts_final':
                                     if event['response']['finished'] is False:
                                         await self.queue_audio(
-                                            base64.b64decode(event['response']['audio_bytes']),
-                                            event['response']['sr'],
-                                            event['response']['sw'],
-                                            event['response']['ch']
+                                            event['response']['job_id'],
+                                            audio_bytes=base64.b64decode(event['response']['audio_bytes']),
+                                            sr=event['response']['sr'],
+                                            sw=event['response']['sw'],
+                                            ch=event['response']['ch']
+                                        )
+                                    else:
+                                        await self.queue_audio(
+                                            event['response']['job_id'],
+                                            finish=True
                                         )
                             case "job_cancel":
                                 self.job_data.pop(job_id)
@@ -260,9 +338,9 @@ class DiscordBot(discord.Client):
                 
                 
     ## Other functionality
-    def clear_conversation(self):
+    def clear_history(self):
         response = requests.delete(
-            self.config.jaison_api_endpoint + '/api/context/conversation'
+            self.config.jaison_api_endpoint + '/api/context'
         ).json()
         
         if response['status'] != 200:

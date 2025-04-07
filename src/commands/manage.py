@@ -11,18 +11,18 @@ class ManageCommandGroup(BaseCommandGroup):
         super().__init__(params)
 
         self.command_list = [
-            clear_conversation
+            clear_history
         ]
 
 '''
 Clear cache conversation history
 '''
-@discord.app_commands.command(name="clear_conversation", description="Clear cache conversation history.")
-async def clear_conversation(interaction) -> None:
+@discord.app_commands.command(name="clear_history", description="Clear cache conversation history.")
+async def clear_history(interaction) -> None:
     try:
-        interaction.client.clear_conversation()
-        logging.info(f"Conversation history cleared successfully")
-        await interaction.response.send_message("Conversation history cleared successfully")
+        interaction.client.clear_history()
+        logging.info(f"History cleared successfully")
+        await interaction.response.send_message("History cleared successfully")
     except Exception as err:
-        logging.error(f"Failed to delete conversation: {str(err)}")
-        await interaction.response.send_message("Failed to clear conversation history.")
+        logging.error(f"Failed to clear history: {str(err)}")
+        await interaction.response.send_message("Failed to clear history.")

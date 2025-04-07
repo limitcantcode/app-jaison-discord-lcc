@@ -37,7 +37,7 @@ async def join_vc(interaction, channel: discord.VoiceChannel) -> None:
     try:
         await _disconnect_client_if_connected(interaction.client) # client cannot connect if it is already in a vc
         interaction.client.vc = await channel.connect(cls=voice_recv.VoiceRecvClient, reconnect=True)
-        interaction.client.vc.listen(BufferSink(interaction.client.scheduler, interaction.client.voice_cb, interaction.client.user_timeout_cb))
+        interaction.client.vc.listen(BufferSink(interaction.client.scheduler, interaction.client))
         await interaction.response.send_message(f"Joined {channel}.")
     except Exception as err:
         logging.error(f"Failed to join voice call: {err}")
