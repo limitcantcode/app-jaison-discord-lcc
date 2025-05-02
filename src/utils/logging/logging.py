@@ -2,7 +2,6 @@ import logging
 import sys
 from src.utils.args import args
 
-
 # Setup formatters and handlers
 class CustomFormatter(logging.Formatter):
     # Using console color codes to style text

@@ -2,7 +2,7 @@ import datetime
 import wave
 from discord.ext import voice_recv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from ..utils.time import get_current_time
+from src.utils.time import get_current_time
 
 '''
 Custom audio sink for managing call audio and triggering callback during silence.
