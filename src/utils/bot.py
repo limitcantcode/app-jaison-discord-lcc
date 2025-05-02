@@ -9,12 +9,12 @@ import json
 import requests
 import base64
 import websockets
-from commands import add_commands
-from commands.sink import BufferSink
-from utils.logging import logger
-from utils.config import config
-from utils.helper.audio import format_audio
-from utils.time import get_current_time
+from src.commands import add_commands
+from src.commands.sink import BufferSink
+from src.utils.logging import logger
+from src.utils.config import config
+from src.utils.helper.audio import format_audio
+from src.utils.time import get_current_time
 
 class DiscordBot(discord.Client):
 

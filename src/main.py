@@ -1,10 +1,10 @@
-from utils.args import args
+from src.utils.args import args
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=args.env)
 
 import os
 import asyncio
-from utils.bot import DiscordBot
+from src.utils.bot import DiscordBot
 
 
 async def main():

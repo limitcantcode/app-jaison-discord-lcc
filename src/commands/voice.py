@@ -2,7 +2,7 @@ from discord.ext import voice_recv
 import discord
 from .base import BaseCommandGroup
 from .sink import BufferSink
-from utils.logging import logger
+from ..utils.logging import logger
 
 class NotInVCException(Exception):
     pass

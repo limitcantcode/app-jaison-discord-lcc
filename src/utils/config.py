@@ -1,5 +1,5 @@
 import yaml
-from utils.args import args
+from src.utils.args import args
 
 class Config():
     def __init__(self):

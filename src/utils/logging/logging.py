@@ -1,6 +1,7 @@
 import logging
 import sys
-from utils.args import args
+from src.utils.args import args
+
 
 # Setup formatters and handlers
 class CustomFormatter(logging.Formatter):
