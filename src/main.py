@@ -1,8 +1,12 @@
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from src.utils.args import args
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=args.env)
 
-import os
 import asyncio
 from src.utils.bot import DiscordBot
 
