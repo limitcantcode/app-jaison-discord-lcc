@@ -1,5 +1,5 @@
-discord.py==2.4.0
-discord-ext-voice-recv==0.4.2a145
+discord.py==2.5.0
+git+https://github.com/imayhaveborkedit/discord-ext-voice-recv.git
 python-dotenv==1.0.1
 websockets==13.1
 asyncio==3.4.3
