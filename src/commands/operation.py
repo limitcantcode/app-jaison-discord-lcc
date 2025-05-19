@@ -10,36 +10,35 @@ class OperationCommandGroup(BaseCommandGroup):
         super().__init__(params)
 
         self.command_list = [
-            operation_start,
-            operation_reload,
+            operation_load,
+            operation_reload_from_config,
             operation_unload
         ]
     
-@discord.app_commands.command(name="operation_start", description="Start a specific operation")
-async def operation_start(interaction, op_type: str, op_id: str) -> None:
+@discord.app_commands.command(name="operation_load", description="Load a specific operation")
+async def operation_load(interaction, op_type: str, op_id: str) -> None:
     try:
         response = requests.post(
-            config.jaison_api_endpoint+"/api/operation/start",
+            config.jaison_api_endpoint+"/api/operation/load",
             headers={"Content-type":"application/json"},
             json={"ops": [{'type': op_type, "id": op_id}]}
         )
         if response.status_code != 200: raise Exception("{} {}".format(response.status_code, response.reason))
         
         parsed_response = response.json()
-        reply = "Operation start job sent successfully: {}".format(parsed_response['response']['job_id'])
+        reply = "Operation load job sent successfully: {}".format(parsed_response['response']['job_id'])
         logging.info(reply)
         await interaction.response.send_message(reply)
     except Exception as err:
-        logging.error(f"Failed to send operation start job: {str(err)}")
-        await interaction.response.send_message(f"Failed to send operation start job: {str(err)}")
+        logging.error(f"Failed to send operation load job: {str(err)}")
+        await interaction.response.send_message(f"Failed to send operation load job: {str(err)}")
         
-@discord.app_commands.command(name="operation_reload", description="Reload a specific operation")
-async def operation_reload(interaction, op_type: str, op_id: str) -> None:
+@discord.app_commands.command(name="operation_reload_from_config", description="Reload a specific operation")
+async def operation_reload_from_config(interaction, op_type: str, op_id: str) -> None:
     try:
         response = requests.post(
             config.jaison_api_endpoint+"/api/operation/reload",
-            headers={"Content-type":"application/json"},
-            json={"ops": [{'type': op_type, "id": op_id}]}
+            headers={"Content-type":"application/json"}
         )
         if response.status_code != 200: raise Exception("{} {}".format(response.status_code, response.reason))
         

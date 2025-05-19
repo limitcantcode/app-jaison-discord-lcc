@@ -19,7 +19,7 @@ async def request_response(interaction, output_audio: bool = False) -> None:
         response = requests.post(
             config.jaison_api_endpoint+"/api/response",
             headers={"Content-type":"application/json"},
-            json={"output_audio": output_audio}
+            json={"include_audio": output_audio}
         )
         if response.status_code != 200: raise Exception("{} {}".format(response.status_code, response.reason))
         

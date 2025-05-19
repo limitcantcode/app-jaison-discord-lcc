@@ -2,7 +2,7 @@ from discord.ext import voice_recv
 import discord
 import logging
 from .base import BaseCommandGroup
-from .sink import BufferSink
+from audio.sink import BufferSink
 
 class NotInVCException(Exception):
     pass
@@ -37,6 +37,14 @@ async def join_vc(interaction, channel: discord.VoiceChannel) -> None:
     try:
         await _disconnect_client_if_connected(interaction.client) # client cannot connect if it is already in a vc
         interaction.client.vc = await channel.connect(cls=voice_recv.VoiceRecvClient, reconnect=True)
+        interaction.client.vc.encoder = discord.opus.Encoder(
+            application="audio",
+            bitrate=128,
+            fec=True,
+            expected_packet_loss=0.15,
+            bandwidth='full',
+            signal_type='auto',
+        )
         interaction.client.vc.listen(BufferSink(interaction.client.scheduler, interaction.client))
         await interaction.response.send_message(f"Joined {channel}.")
     except Exception as err:
