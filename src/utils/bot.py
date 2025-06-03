@@ -153,7 +153,7 @@ class DiscordBot(discord.Client):
     def cancel_inflight_response(self):
         if self.audio_output_job_id is not None and self.audio_output_complete_event.is_set():
             requests.delete(
-                self.config.jaison_api_endpoint+'/app/job',
+                self.config.jaison_api_endpoint+'/api/job',
                 headers={"Content-type":"application/json"},
                 json={
                     "job_id": self.audio_output_job_id,

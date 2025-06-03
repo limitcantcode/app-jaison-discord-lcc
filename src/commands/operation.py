@@ -19,7 +19,7 @@ class OperationCommandGroup(BaseCommandGroup):
 async def operation_load(interaction, op_type: str, op_id: str) -> None:
     try:
         response = requests.post(
-            config.jaison_api_endpoint+"/api/operation/load",
+            config.jaison_api_endpoint+"/api/operations/load",
             headers={"Content-type":"application/json"},
             json={"ops": [{'type': op_type, "id": op_id}]}
         )
@@ -34,10 +34,10 @@ async def operation_load(interaction, op_type: str, op_id: str) -> None:
         await interaction.response.send_message(f"Failed to send operation load job: {str(err)}")
         
 @discord.app_commands.command(name="operation_reload_from_config", description="Reload a specific operation")
-async def operation_reload_from_config(interaction, op_type: str, op_id: str) -> None:
+async def operation_reload_from_config(interaction) -> None:
     try:
         response = requests.post(
-            config.jaison_api_endpoint+"/api/operation/reload",
+            config.jaison_api_endpoint+"/api/operations/reload",
             headers={"Content-type":"application/json"}
         )
         if response.status_code != 200: raise Exception("{} {}".format(response.status_code, response.reason))
@@ -51,10 +51,10 @@ async def operation_reload_from_config(interaction, op_type: str, op_id: str) ->
         await interaction.response.send_message(f"Failed to send operation reload job: {str(err)}")
 
 @discord.app_commands.command(name="operation_unload", description="Unload a specific operation")
-async def operation_unload(interaction, op_type: str, op_id: str) -> None:
+async def operation_unload(interaction, op_type: str, op_id: str = None) -> None:
     try:
         response = requests.post(
-            config.jaison_api_endpoint+"/api/operation/unload",
+            config.jaison_api_endpoint+"/api/operations/unload",
             headers={"Content-type":"application/json"},
             json={"ops": [{'type': op_type, "id": op_id}]}
         )
