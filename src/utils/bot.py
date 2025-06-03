@@ -292,7 +292,7 @@ class DiscordBot(discord.Client):
                                     if response.get("success", False) and self.job_data[job_id]['output_text']:
                                         await self.send_text_to_channel(
                                             self.job_data[job_id]['text_channel'],
-                                            "Something is wrong with my AI"
+                                            self.job_data[job_id]['text_content'] or "Something is wrong with my AI"
                                         )
                             case _:
                                 pass
