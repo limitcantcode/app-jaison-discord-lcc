@@ -17,5 +17,4 @@ def format_audio(str_bytes, src_sr, src_sw, src_channels):
         case _:
             raise Exception("Invalid sample width given: {src_sw}")
 
-    result = io.BytesIO(audio_array.tobytes())
-    return result
+    return audio_array.tobytes()

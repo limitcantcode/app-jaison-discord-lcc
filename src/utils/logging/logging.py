@@ -26,15 +26,16 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
-file_formatter = logging.Formatter("[%(asctime)s] [%(levelname)-5.5s] [%(filename)s::%(lineno)d %(funcName)s]: %(message)s")
-file_handler = logging.FileHandler("output.log")
-file_handler.setFormatter(file_formatter)
+def setup_logging():
+    file_formatter = logging.Formatter("[%(asctime)s] [%(levelname)-5.5s] [%(filename)s::%(lineno)d %(funcName)s]: %(message)s")
+    file_handler = logging.FileHandler("output.log")
+    file_handler.setFormatter(file_formatter)
 
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(CustomFormatter())
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(CustomFormatter())
 
-logger = logging.getLogger('discord_logger')
-logger.setLevel(getattr(logging, args.log_level))
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+    logger = logging.getLogger()
+    logger.setLevel(getattr(logging, args.log_level))
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
 

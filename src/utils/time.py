@@ -1,13 +1,5 @@
 import datetime
-from dateutil import tz
 
-def get_current_time(include_ms: bool = True, as_str: bool = True):
-    time = datetime.datetime.now()
-
-    if not include_ms:
-        time = time.replace(microsecond=0)
-    time = time.astimezone(tz.tzlocal())
-    if as_str:
-        time = time.isoformat()
-        
-    return time
+'''Get back the UNIX timestamp in ms'''
+def get_current_time() -> int:
+    return int(datetime.datetime.now().replace(microsecond=0).timestamp())

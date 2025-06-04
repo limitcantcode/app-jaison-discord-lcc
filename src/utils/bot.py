@@ -4,43 +4,80 @@ Discord Bot Main Class to interface with Discord
 
 import discord
 import asyncio
+from asyncio import CancelledError
 import os
 import json
 import requests
 import base64
 import websockets
+import logging
+from typing import Dict
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from commands import add_commands
-from commands.sink import BufferSink
-from utils.logging import logger
+from audio.sink import BufferSink, UserAudioBuffer
+from audio.source import PCMByteBufferAudio
 from utils.config import config
 from utils.helper.audio import format_audio
 from utils.time import get_current_time
+
+AUDIO_PACKET_SIZE = 4096
 
 class DiscordBot(discord.Client):
 
     def __init__(self):
         if config.opus_filepath is not None: discord.opus.load_opus(config.opus_filepath)
 
-        logger.debug("Activating with all intents...")
+        logging.debug("Activating with all intents...")
         super().__init__(intents=discord.Intents.all())
-        logger.debug("Reloading command tree...")
+        logging.debug("Reloading command tree...")
         self.tree, self.tree_params = add_commands(self, os.getenv("DISCORD_SERVER_ID"))
         self.config = config
 
-        self.vc = None
-        self.DEFAULT_TEXT_CHANNEL = discord.Object(os.getenv("DISCORD_DEFAULT_TEXT_CHANNEL"))
-        self.jaison_event_task = asyncio.create_task(self._event_listener())
-        self.keep_alive_task = asyncio.create_task(self._keep_alive_vc_listening())
-        self.run_data = dict()
-        self.run_queue = list()
+        # Stubs before readying
+        self.job_data: Dict[str, Dict] = None
+        self.jaison_event_task: asyncio.Task =None
+        self.DEFAULT_TEXT_CHANNEL: discord.TextChannel = None
+        
+        self.scheduler: AsyncIOScheduler = None
+        
+        self.vc: discord.VoiceClient = None
+        self.audio_input_queue: asyncio.Queue = None
+        self.audio_input_task: asyncio.Task = None
+        self.audio_output_job_id: str = None
+        self.audio_output_complete_event: asyncio.Event = None
+        self.audio_player_task: asyncio.Task = None
+        self.audio_output: PCMByteBufferAudio = None
+        self.audio_ready: asyncio.Event = None
+        
+        self.response_request_id: int = 0
 
     # Handler for bot activation
     async def on_ready(self):
         await self.tree.sync(**self.tree_params)
-        logger.debug(f"Command tree resynced with params: {self.tree_params}")
-        logger.info("Discord Bot is ready!")
+        logging.debug(f"Command tree resynced with params: {self.tree_params}")
+        
+        logging.debug(f"Starting tasks...")
+        self.job_data = dict()
+        self.jaison_event_task = asyncio.create_task(self._event_listener())
+        self.DEFAULT_TEXT_CHANNEL = discord.Object(os.getenv("DISCORD_DEFAULT_TEXT_CHANNEL"))
+        
+        self.scheduler: AsyncIOScheduler = AsyncIOScheduler()
+        self.scheduler.start()
+        
+        self.vc = None
+        self.audio_input_queue = asyncio.Queue()
+        self.audio_input_task = asyncio.create_task(self._input_audio_loop())
+        self.audio_output_job_id = None
+        self.audio_output_complete_event = asyncio.Event()
+        self.audio_output_complete_event.set()
+        
+        self.audio_player_task = asyncio.create_task(self._play_audio_loop())
+        self.audio_output = PCMByteBufferAudio()
+        self.audio_ready = asyncio.Event()
+        
+        logging.info("Discord Bot is ready!")
 
-    # Handler for any new messages
+    '''Respond to every text message from others'''
     async def on_message(self, message):
         # Skip messages from self
         if self.application_id == message.author.id:
@@ -49,168 +86,165 @@ class DiscordBot(discord.Client):
         # Generate response
         user = message.author.display_name or message.author.global_name
         content = message.content
-        logger.debug(f"Message by user {user}: {content}")
+        logging.debug(f"Message by user {user}: {content}")
         
         await message.channel.typing()
         response = requests.post(
-            self.config.jaison_api_endpoint+'/run',
+            self.config.jaison_api_endpoint+'/api/context/conversation/text',
             headers={"Content-type":"application/json"},
             json={
-                "process_dialog": True,
-                "input_user": user,
-                "input_time": get_current_time(),
-                "input_text": content,
-                "output_text": True,
-                "output_audio": False
+                "user": user,
+                "timestamp": get_current_time(),
+                "content": content
             }
         ).json()
-
-        if response['status'] == 500:
-            logger.error(f"Failed to start a run: {response['message']}")
+        if response['status'] != 200:
+            reply = f"Failed to start a text message: {response['status']} {response['message']}"
+            logging.error(reply)
+            await self.send_text_to_channel(message.channel, reply)
+            return
+        
+        response = requests.post(
+            self.config.jaison_api_endpoint+'/api/response',
+            headers={"Content-type":"application/json"},
+            json={
+                "include_audio": False
+            }
+        ).json()
+        if response['status'] != 200:
+            reply = f"Failed to start a texting response job: {response['status']} {response['message']}"
+            logging.error(reply)
+            await self.send_text_to_channel(message.channel, reply)
             return
 
-        self._add_response_job(
-            response['response']['run_id'],
+        self._add_text_job(
+            response['response']['job_id'],
             output_text=True,
-            output_audio=False,
-            text_channel=message.channel,
-            voice_client=None
+            text_channel=message.channel
         )
 
-    async def voice_cb(self, sink: BufferSink):
-        await self.request_voice_response(sink)
-
-    # Track runs sent to jaison-core
-    def _add_response_job(
+    # Track texting specific jobs
+    def _add_text_job(
         self,
-        run_id: str,
+        job_id: str,
         output_text: bool = False,
-        output_audio: bool = False,
-        text_channel: discord.TextChannel = None,
-        voice_client: discord.VoiceClient = None
+        include_audio: bool = False,
+        text_channel: discord.TextChannel = None
     ):
-        existing = self.run_data.get(run_id)
-        completion_future = None
-        futures_prior = None
-        if existing:
-            text_channel = text_channel or existing['text_channel']
-            voice_client = voice_client or existing['voice_client']
-            completion_future = existing['completion_future']
-            futures_prior = existing['futures_prior']
-        else:
-            completion_future = asyncio.Future()
-            futures_prior = list(self.run_queue)
-            self.run_queue.append(completion_future)
-
-        self.run_data[run_id] = {
-            "text_result": "",
-            "audio_result": b"",
-            "audio_sr": None,
-            "audio_sw": None,
-            "audio_channels": None,
-            "text_success": True,
-            "audio_success": True,
+        self.job_data[job_id] = { # Specific tracking for text messages. Audio will be naive
             "output_text": output_text,
-            "output_audio": output_audio,
-            "text_channel": text_channel,
-            "voice_client": voice_client,
-            "completion_future": completion_future,
-            "futures_prior": futures_prior
+            "include_audio": include_audio,
+            "text_content": "",
+            "text_channel": text_channel
         }
-
-    '''
-    Response pipeline initiator
-
-    Sends all audio to jaison-core in order of beginning speech,
-    requesting a response after the last audio input.
-
-    TODO: breaks in multi-turn conversations with multiple people as multiple lines per person turn into 1 long line
-    '''
-    async def request_voice_response(self, sink: BufferSink):
-        logger.debug("Running Discord bot's voice callback...")
-        global stt
-        # TODO preprocess and determine if its worth getting a response for
-
-        # Once you know you want to try and respond
-        voice_data = dict()
-        for user in sink.buf:
-            try:
-                idx = len(sink.buf[user][1])
-                if idx > 0:
-                    voice_data[sink.buf[user][0]] = (user, sink.buf[user][1][:idx])
-                    sink.freshen(user, idx=idx)
-            except Exception as err:
-                logger.error("Failed to save audio recording to file", exc_info=True, stack_info=True)
-                continue
         
-        if len(voice_data) == 0: return
-
-        sorted_timestamps = sorted(voice_data.keys())
-        for i in range(len(sorted_timestamps)):
-            ts = sorted_timestamps[i]
-            data = voice_data[ts]
-            should_generate_response = i == len(sorted_timestamps)-1
-            response = requests.post(
-                self.config.jaison_api_endpoint+'/run',
+    '''Send text message to channel'''
+    async def send_text_to_channel(self, channel: discord.TextChannel, content: str):
+        await channel.send(content)
+        
+    '''Start generating response during pause in conversation'''
+    async def voice_cb(self):
+        self.response_request_id += 1
+        await self.audio_input_queue.put({
+            "type": "response_request",
+            "response_request_id": self.response_request_id
+        })
+        
+    def cancel_inflight_response(self):
+        if self.audio_output_job_id is not None and self.audio_output_complete_event.is_set():
+            requests.delete(
+                self.config.jaison_api_endpoint+'/api/job',
                 headers={"Content-type":"application/json"},
                 json={
-                    "process_dialog": True,
-                    "input_user": data[0],
-                    "input_time": ts,
-                    "input_audio_bytes": base64.b64encode(data[1]).decode('utf-8'),
-                    "input_audio_sample_rate": sink.sample_rate,
-                    "input_audio_sample_width": sink.sample_width,
-                    "input_audio_channels": sink.channels,
-                    "output_text": should_generate_response,
-                    "output_audio": should_generate_response
+                    "job_id": self.audio_output_job_id,
+                    "reason": "Preventing interruption in conversation"
                 }
-            ).json()
-
-            if response['status'] == 500:
-                logger.error(f"Failed to start a run: {response['message']}")
-                continue
-
-            self._add_response_job(
-                response['response']['run_id'],
-                output_text=should_generate_response,
-                output_audio=should_generate_response,
-                text_channel=None,
-                voice_client=self.vc
             )
+            self.audio_output_job_id = None
     
-    # Play audio, but wait for all previous responses to finish playing
-    async def play_audio(self, run_id):
-        await asyncio.gather(*self.run_data[run_id]["futures_prior"])
-        data = self.run_data[run_id]
+    async def _input_audio_loop(self):
+        while True:
+            try:
+                input_d = await self.audio_input_queue.get()
+                if input_d['type'] == 'audio_input':
+                    response = requests.post(
+                        self.config.jaison_api_endpoint+'/api/context/conversation/audio',
+                        headers={"Content-type":"application/json"},
+                        json={
+                            "user": input_d['name'],
+                            "timestamp": input_d['timestamp'],
+                            "audio_bytes": base64.b64encode(input_d['audio_bytes']).decode('utf-8'),
+                            "sr": input_d['sr'],
+                            "sw": input_d['sw'],
+                            "ch": input_d['ch'],
+                        }
+                    ).json()
+                    
+                    if response['status'] != 200:
+                        raise Exception(f"Failed to start add voice data to conversation: {response['status']} {response['message']}")
+                elif input_d['type'] == 'response_request':
+                    if input_d['response_request_id'] == self.response_request_id:
+                        self.cancel_inflight_response()
+                        await self.audio_output_complete_event.wait()
+                        response = requests.post(
+                            self.config.jaison_api_endpoint+'/api/response',
+                            headers={"Content-type":"application/json"},
+                            json={"include_audio": True}
+                        ).json()
+
+                        if response['status'] != 200:
+                            raise Exception(f"Failed to start a response job: {response['status']} {response['message']}")
+                            
+                        self.audio_output_job_id = response['response']['job_id']
+                else:
+                    raise Exception(f"Unexpected input dictionary in queue: {input_d}")
+            except CancelledError:
+                raise
+            except Exception as err:
+                logging.error("Error occured while processing job queue", exc_info=True)
+    
+    '''Save dialogue per person when the individual finishes speaking'''
+    async def user_timeout_cb(self, user_audio_buf: UserAudioBuffer, sink: BufferSink):            
+        sink.buf_d.pop(user_audio_buf.name)
+        await self.audio_input_queue.put({
+            "type": "audio_input",
+            "name": user_audio_buf.name,
+            "timestamp": user_audio_buf.timestamp,
+            "audio_bytes": user_audio_buf.audio_bytes,
+            "sr": sink.sample_rate,
+            "sw": sink.sample_width,
+            "ch": sink.channels
+        })
+        
+    async def queue_audio(self, job_id, audio_bytes: bytes = b'', sr: int = -1, sw: int = -1, ch: int = -1):
         audio = format_audio(
-            data['audio_result'],
-            data['audio_sr'],
-            data['audio_sw'],
-            data['audio_channels']
+            audio_bytes,
+            sr,
+            sw,
+            ch
         )
+        self.audio_output.write(audio)
+        self.audio_ready.set()
+                
+    async def _play_audio_loop(self):
+        while True:
+            if len(self.audio_output.stream) == 0:
+                self.audio_ready.clear()
+                await self.audio_ready.wait()
+                
+            
+            if not self.vc.is_playing():
+                self.audio_output_complete_event.clear()
+                self.vc.play(self.audio_output, after=self._create_cb())
+                await self.audio_output_complete_event.wait()
 
-        source = discord.PCMAudio(audio)
-        cb = self.create_cb(run_id)
-        self.vc.play(source, after=cb)
-
-    # Creates callback to unblock and cleanup after playing audio response
-    def create_cb(self, run_id):
+    #Creates callback to unblock
+    def _create_cb(self):
         def cb(error=None):
             if error:
-                logger.error(f"Something went wrong using response for {run_id}: {error}")
-            run = self.run_data[run_id]
-            run['completion_future'].set_result(None)
-            self.run_queue.pop(0)
-            del self.run_data[run_id]
-            logger.debug(f"Completed {run_id}")
+                logging.error(f"Something went wrong playing audio: {error}")
+            self.audio_output_complete_event.set()
         return cb
-    
-    # Send text message to a channel
-    async def send_text_to_channel(self, run_id):
-        await asyncio.gather(*self.run_data[run_id]["futures_prior"])
-        message, channel = self.run_data[run_id]['text_result'], self.run_data[run_id]['text_channel']
-        await channel.send(message)
-        self.create_cb(run_id)()
 
     '''
     Main event-listening loop handling JAIson responses.
@@ -219,81 +253,55 @@ class DiscordBot(discord.Client):
         while True:
             try:
                 async with websockets.connect(self.config.jaison_ws_endpoint) as ws:
-                    logger.info("Connected to JAIson ws server")
+                    logging.info("Connected to JAIson ws server")
 
                     while True:
                         data = json.loads(await ws.recv())
                         event, status = data[0], data[1]
-                        logger.debug(f"Event received {str(event):.200}")
-                        match event['message']:
-                            case "run_start":
-                                if event['response']['run_id'] not in self.run_data:
-                                    if not event['response']['output_text'] and not event['response']['output_audio']: continue
-                                    self._add_response_job(
-                                        event['response']['run_id'],
-                                        output_text=event['response']['output_text'],
-                                        output_audio=event['response']['output_audio'],
-                                        text_channel=None if event['response']['output_audio'] else self.DEFAULT_TEXT_CHANNEL,
-                                        voice_client=self.vc
+                        response = event.get("response", {})
+                        job_id = response.get('job_id')
+                        result = response.get("result", {})
+                        
+                        if job_id is None:
+                            logging.warning(f"Got unexpected event: {str(event)}")
+                            continue
+                        
+                        match event.get('message', ""):
+                            case "response": # Response pipeline
+                                if "start" in response and job_id not in self.job_data:
+                                    self._add_text_job( # Assume any not made here are for audio
+                                        job_id,
+                                        output_text=False,
+                                        include_audio=response.get("start", {}).get("include_audio", False),
+                                        text_channel=self.DEFAULT_TEXT_CHANNEL,
                                     )
-                            case "run_finish":
-                                pass
-                            case "run_cancel":
-                                run = self.run_data[event['response']['run_id']]
-                                run['completion_future'].set_result(None)
-                                self.run_queue.remove(run['completion_future'])
-                                del run
-                            case "run_t2t_chunk":
-                                if self.run_data[event['response']['run_id']]['text_success'] != event['response']['success']:
-                                    self.run_data[event['response']['run_id']] = self.run_data[event['response']['run_id']] | {
-                                        'text_success': event['response']['success'],
-                                        "text_result": event['response']['chunk']
-                                    }
-                                else:
-                                    self.run_data[event['response']['run_id']]['text_result'] += event['response']['chunk']
-                            case "run_t2t_stop":
-                                if (
-                                    self.run_data[event['response']['run_id']]['output_text'] 
-                                    and self.run_data[event['response']['run_id']]['text_channel']
-                                ):
-                                    await self.send_text_to_channel(event['response']['run_id'])
-                            case "run_tts_chunk":
-                                if self.run_data[event['response']['run_id']]['audio_success'] != event['response']['success']:
-                                    self.run_data[event['response']['run_id']] = self.run_data[event['response']['run_id']] | {
-                                        'audio_success': event['response']['success'],
-                                        "audio_result": base64.b64decode(event['response']['chunk']),
-                                        "audio_sr": event['response']['sample_rate'],
-                                        "audio_sw": event['response']['sample_width'],
-                                        "audio_channels": event['response']['channels']
-                                    }
-                                else:
-                                    self.run_data[event['response']['run_id']] = self.run_data[event['response']['run_id']] | {
-                                        "audio_result": self.run_data[event['response']['run_id']]['audio_result'] + base64.b64decode(event['response']['chunk']),
-                                        "audio_sr": event['response']['sample_rate'],
-                                        "audio_sw": event['response']['sample_width'],
-                                        "audio_channels": event['response']['channels']
-                                    }
-                            case "run_tts_stop":
-                                await self.play_audio(event['response']['run_id'])
+                                    
+                                if "content" in result:
+                                    self.job_data[job_id]['text_content'] += " " + result['content']
+                                    
+                                if "audio_bytes" in result:
+                                    await self.queue_audio(
+                                        job_id,
+                                        audio_bytes=base64.b64decode(result['audio_bytes']),
+                                        sr=result['sr'],
+                                        sw=result['sw'],
+                                        ch=result['ch']
+                                    )
+                                    
+                                if response.get("finished", False):
+                                    if response.get("success", False) and self.job_data[job_id]['output_text']:
+                                        await self.send_text_to_channel(
+                                            self.job_data[job_id]['text_channel'],
+                                            self.job_data[job_id]['text_content'] or "Something is wrong with my AI"
+                                        )
                             case _:
                                 pass
             except OSError:
-                logger.error("Server closed suddenly. Attempting reconnect in 5 seconds", exc_info=True)
-                self.run_data = dict()
-                self.run_queue = list()
+                logging.error("Server closed suddenly. Attempting reconnect in 5 seconds", exc_info=True)
+                self.job_data = dict()
+                self.job_queue = list()
                 await asyncio.sleep(5)
             except Exception as err:
-                logger.error("Event listener encountered an error", exc_info=True)
-                self.run_data = dict()
-                self.run_queue = list()
-
-    # Needed to keep voice-call listening socket alive during periods of long talking
-    # Credit to https://github.com/imayhaveborkedit/discord-ext-voice-recv/issues/8#issuecomment-2614267950
-    async def _keep_alive_vc_listening(self):
-        while True:
-            try:
-                await asyncio.sleep(5)
-                if self.vc and self.vc.is_connected() and not self.vc.is_playing():
-                    self.vc.send_audio_packet(b"\xf8\xff\xfe", encode=False)
-            except Exception as err:
-                logger.error("keep_alive heartbeat failed", exc_info=True)
+                logging.error("Event listener encountered an error", exc_info=True)
+                self.job_data = dict()
+                self.job_queue = list()
