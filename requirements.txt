@@ -9,4 +9,3 @@ websockets==13.1
 apscheduler==3.11.0
 python-dateutil
 numpy==2.2.4
-aiohttp==3.12.13
