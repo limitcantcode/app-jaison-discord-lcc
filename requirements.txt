@@ -1,4 +1,4 @@
-discord.py==2.5.0
+git+https://github.com/Rapptz/discord.py.git
 git+https://github.com/imayhaveborkedit/discord-ext-voice-recv.git
 python-dotenv==1.0.1
 websockets==13.1
@@ -7,5 +7,5 @@ requests==2.32.3
 pyyaml==6.0.2
 websockets==13.1
 apscheduler==3.11.0
+python-dateutil
 numpy==2.2.4
-python-dateutil==2.9.0.post0
