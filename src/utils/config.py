@@ -8,7 +8,9 @@ class Config():
         self.jaison_api_endpoint = self.config['jaison-api-endpoint']
         self.jaison_ws_endpoint = self.config['jaison-ws-endpoint']
         self.opus_filepath = self.config['opus-filepath']
+        self.idle_interval = self.config['idle-interval']
         assert(self.jaison_api_endpoint is not None)
         assert(self.jaison_ws_endpoint is not None)
+        assert(self.idle_interval >= 0)
 
 config = Config()
