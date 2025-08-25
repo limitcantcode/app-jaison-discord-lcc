@@ -17,11 +17,6 @@ class ContextCommandGroup(BaseCommandGroup):
             context_custom_remove,
             context_custom_register
         ]
-        
-# Context
-# /api/context context_request_add
-# /api/context/conversation/text context_conversation_add_text
-# /api/context/custom context_custom_add remove update
 
 @discord.app_commands.command(name="context_request_add", description="Make a request")
 async def context_request_add(interaction, content: str) -> None:
