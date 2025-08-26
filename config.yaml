@@ -1,3 +1,4 @@
 jaison-api-endpoint: "http://127.0.0.1:7272"
 jaison-ws-endpoint: "ws://127.0.0.1:7272"
 opus-filepath: null
+idle-interval: 30 # seconds of silence before next response in voice calls (0 to disable)

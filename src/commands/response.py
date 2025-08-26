@@ -13,7 +13,7 @@ class ResponseCommandGroup(BaseCommandGroup):
             request_response
         ]
 
-@discord.app_commands.command(name="request_response", description="Clear cache conversation history.")
+@discord.app_commands.command(name="request_response", description="Request a response.")
 async def request_response(interaction, output_audio: bool = False) -> None:
     try:
         response = requests.post(

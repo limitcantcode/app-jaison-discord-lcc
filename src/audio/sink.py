@@ -6,6 +6,7 @@ import discord
 from discord.ext import voice_recv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from utils.time import get_current_time
+from utils.config import config
 
 '''
 Custom audio sink for managing call audio and triggering callback during silence.
@@ -28,14 +29,15 @@ class BufferSink(voice_recv.AudioSink):
         self.idle_timer = None
         self.bot_client = bot_client
         
-        self.idle_timer = self.scheduler.add_job(
-            self.bot_client.voice_cb,
-            'interval',
-            seconds=30,
-            args=[],
-            id='idle_timer',
-            replace_existing=True
-        )
+        if config.idle_interval > 0:
+            self.idle_timer = self.scheduler.add_job(
+                self.bot_client.voice_cb,
+                'interval',
+                seconds=config.idle_interval,
+                args=[],
+                id='idle_timer',
+                replace_existing=True
+            )
         
     def wants_opus(self) -> bool:
         return False
@@ -51,14 +53,15 @@ class BufferSink(voice_recv.AudioSink):
             id='response_timer',
             replace_existing=True
         )
-        self.idle_timer = self.scheduler.add_job(
-            self.bot_client.voice_cb,
-            'interval',
-            seconds=30,
-            args=[],
-            id='idle_timer',
-            replace_existing=True
-        )
+        if config.idle_interval > 0:
+            self.idle_timer = self.scheduler.add_job(
+                self.bot_client.voice_cb,
+                'interval',
+                seconds=config.idle_interval,
+                args=[],
+                id='idle_timer',
+                replace_existing=True
+            )
         if user.display_name not in self.buf_d:
             self.buf_d[user.display_name] = UserAudioBuffer(self, user.display_name, self.scheduler, self.bot_client)
         self.buf_d[user.display_name].write(bytes(data.pcm))
